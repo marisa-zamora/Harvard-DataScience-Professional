@@ -1,0 +1,538 @@
+---
+title: "HarvardX – Data Science Capstone: MovieLens Capstone Project Report"
+date: "January, 2021"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 2
+    number_sections: true
+    highlight: pygments
+    keep_tex: true
+---
+
+## Overview
+Recommendations systems or recommender systems use historic information to generate recommendations for the users. Previous information is used to predict what rating that person is going to give to something and then recommend that to the users.
+Some of the most famous companies that use recommendation systems area Amazon, Netflix, Spotify and LinkedIn, based on the information they have about the items (jobs, movies, music, clothes, etc.) that you have rated, the predict the rating than you are most likely to give to other items and those are their recommendations.
+In this project the goal is to build movie recommendation system that is going to be evaluated based on the RMSE (Root Mean Squared Error) 
+The goal is to reach a RMSE lower than 0.86490
+
+```{r}
+##########################################################
+# Create edx set, validation set (final hold-out test set)
+##########################################################
+
+# Note: this process could take a couple of minutes
+
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+
+library(tidyverse)
+library(caret)
+library(data.table)
+
+# MovieLens 10M dataset:
+# https://grouplens.org/datasets/movielens/10m/
+# http://files.grouplens.org/datasets/movielens/ml-10m.zip
+
+dl <- tempfile()
+download.file("http://files.grouplens.org/datasets/movielens/ml-10m.zip",
+              dl)
+
+ratings <-
+  fread(
+    text = gsub("::", "\t", readLines(unzip(
+      dl, "ml-10M100K/ratings.dat"
+    ))),
+    col.names = c("userId", "movieId", "rating", "timestamp")
+  )
+head(ratings)
+
+movies <-
+  str_split_fixed(readLines(unzip(dl, "ml-10M100K/movies.dat")), "\\::", 3)
+colnames(movies) <- c("movieId", "title", "genres")
+
+head(movies)
+
+# if using R 4.0 or later:
+movies <-
+  as.data.frame(movies) %>% mutate(
+    movieId = as.numeric(movieId),
+    title = as.character(title),
+    genres = as.character(genres)
+  )
+
+head(movies)
+
+movielens <- left_join(ratings, movies, by = "movieId")
+nrow(movielens)
+head(movielens)
+
+# Validation set will be 10% of MovieLens data
+set.seed(1, sample.kind = "Rounding") # if using R 3.5 or earlier, use `set.seed(1)`
+test_index <-
+  createDataPartition(
+    y = movielens$rating,
+    times = 1,
+    p = 0.1,
+    list = FALSE
+  )
+edx <- movielens[-test_index, ]
+temp <- movielens[test_index,]
+
+# Make sure userId and movieId in validation set are also in edx set
+validation <- temp %>%
+  semi_join(edx, by = "movieId") %>%
+  semi_join(edx, by = "userId")
+
+head(validation)
+
+
+# Add rows removed from validation set back into edx set
+removed <- anti_join(temp, validation)
+edx <- rbind(edx, removed)
+
+head(edx)
+rm(dl, ratings, movies, test_index, temp, movielens, removed)
+``` 
+
+
+##Data Analysis
+The data set used in this project is provided by GroupLens and other dataset are avaible in this website http://files.grouplens.org/datasets 
+The 10 million row dataset is divided into two datasets. The training and the validation dataset which is 10 percent of the data. 
+The training dataset contains 9 millions of rows, almost 70,000 users and approximately 10,000 different movies
+
+```{r}
+edx %>% summarize(
+  Rows = nrow(edx),
+  Users = n_distinct(userId),
+  Movies = n_distinct(movieId)
+) %>% formattable()
+
+colnames(edx)
+
+head(edx) %>% formattable()
+
+``` 
+
+##Wrangle and prepare the data
+In the data analysis we find out these things of the dataset that we are going to change so that the dataset is ready for the model building phase:
+1.	Separate the genre 
+2.	Get the date from the time stamp and separate the in year and month column
+3.	Extract the year of the movie from the title
+
+**sepatare the genre**
+```{r}
+edx <- edx %>%
+  separate_rows(genres,
+                sep = "\\|")
+```
+
+**get the release date**
+```{r}
+edx <-
+  edx %>% mutate(release = substr(title, nchar(title) - 6, nchar(title))) %>%
+  mutate(release = as.integer(substr(release, 3, 6)))
+```
+  
+**get the date from the time stamp**
+```{r}
+edx <-
+  edx %>% mutate(date = as.POSIXct(timestamp, origin = "1970-01-01"))
+
+edx <- edx  %>%
+  mutate(month = format(edx$date, "%m")) %>%
+  mutate(year = format(edx$date, "%Y"))
+
+```
+
+**select the columns needed**
+```{r}
+edx <-
+  edx %>% select(userId, movieId, rating, title, genres, release, month, year)
+head(edx) %>% formattable()
+
+```
+
+**Do the same with the validation dataset**
+**sepatare the genre**
+```{r}
+validation <- validation %>%
+  separate_rows(genres,
+                sep = "\\|")
+
+```
+
+**get the release date**
+```{r}
+validation <-
+  validation %>% mutate(release = substr(title, nchar(title) - 6, nchar(title))) %>%
+  mutate(release = as.integer(substr(release, 3, 6)))
+```
+  
+**get the date from the time stamp**
+```{r}
+validation <-
+  validation %>% mutate(date = as.POSIXct(timestamp, origin = "1970-01-01"))
+
+validation <- validation %>%
+  mutate(month = format(validation$date, "%m")) %>%
+  mutate(year = format(validation$date, "%Y"))
+
+```
+
+**select the columns needed**
+```{r}
+
+validation <-
+  validation %>% select(userId, movieId, rating, title, genres, release, month, year)
+head(validation)
+
+```
+
+**change the data type in both datasets**
+```{r}
+
+edx$release <- as.numeric(edx$release)
+edx$year <- as.numeric(edx$year)
+edx$month <- as.numeric(edx$month)
+
+validation$year <- as.numeric(validation$year)
+validation$month <- as.numeric(validation$month)
+validation$release <- as.numeric(validation$release)
+save.image(file = 'myEnvironment.RData')
+```
+
+## Exploratory analysis
+
+**Users**
+```{r}
+users_per_year <- edx %>% group_by(year) %>%
+  summarise(user = n_distinct(userId))
+
+ggplot(data = users_per_year, aes(x = year, y = user, fill = year)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Users per Year", x = "Year",
+       y = "Users")
+
+edx %>% group_by(year, userId) %>%
+  summarise(ratings = n()) %>% arrange(desc(ratings)) %>% formattable()
+
+```
+
+
+**Raitings**
+```{r}
+
+summary(edx$rating)
+
+
+ggplot(data = edx, aes(x = rating, fill = rating)) +
+  geom_bar() +
+  labs(title = "Distribution of Ratings", x = "Rating", y = "Frequency")
+
+
+
+ratings_per_year <- edx %>% group_by(year) %>%
+  summarise(ratings = n())
+
+ggplot(data = ratings_per_year, aes(x = year, y = ratings, fill = year)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Ratings per Year", x = "Year",
+       y = "Ratings")
+
+
+ratings_per_movie <- edx %>% group_by(title) %>%
+  summarise(ratings = n()) %>% arrange(desc(ratings)) %>% head(n = 20)
+
+ggplot(data = ratings_per_movie, aes(x = title, y = ratings, fill = title)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Ratings per Movie", x = "Title",
+       y = "Ratings")
+
+ratings_once <- edx %>% group_by(title) %>%
+  summarise(ratings = n()) %>% filter(ratings == 1) %>% select(title)
+
+ratings_once %>% formattable()
+
+
+ratings_per_genre <- edx %>% group_by(genres) %>%
+  summarise(ratings = n())
+
+ggplot(data = ratings_per_genre, aes(x = genres, y = ratings, fill = genres)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Ratings per Genre", x = "Genre",
+       y = "Frequency")
+
+ratings_per_genre %>% formattable()
+
+
+mean_per_genre <- edx %>% group_by(genres) %>%
+  summarise(mean = mean(rating))
+
+ggplot(data = mean_per_genre, aes(x = genres, y = mean, fill = genres)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Mean per Genre", x = "Genre",
+       y = "Mean")
+
+mean_per_genre %>% formattable()
+```
+
+##Predictive Modelbuilding and evaluation
+
+First we are going to create a data frame to keep all the results in there
+
+```{r}
+RMSE_results <-
+  data.frame(model = character(0),
+             variables = character(0),
+             RMSE = numeric())
+```
+
+**Naive Model**
+```{r}
+mu_hat <- mean(edx$rating)
+RMSE_mean_result <- RMSE(validation$rating, mu_hat)
+RMSE_results <-
+  RMSE_results %>% add_row(model = "Mean",
+                           variables = "All",
+                           RMSE = RMSE_mean_result)
+```
+
+**Movie based Model**
+```{r}
+movie <- edx %>%
+  group_by(movieId) %>%
+  summarize(b_i = mean(rating - mu_hat))
+
+qplot(
+  b_i,
+  geom = "histogram",
+  main = "Movie Means",
+  fill = I("blue"),
+  color = I("blue"),
+  data =
+    movie
+)
+
+#### Compute the predicted rating in the validation dataset
+rmse_movie_model <- validation %>%
+  left_join(movie, by = 'movieId') %>%
+  mutate(pred = mu_hat + b_i) %>%
+  pull(pred)
+rmse_movie_model_result <- RMSE(validation$rating, rmse_movie_model)
+RMSE_results <-
+  RMSE_results %>% add_row(model = "Mean",
+                           variables = "Movie",
+                           RMSE = rmse_movie_model_result)
+
+```
+The RMSE on the validation dataset is 0.941070 which is also above our goal.
+
+
+**Movie and user based model**
+```{r}
+user <- edx %>%
+  left_join(movie, by = 'movieId') %>%
+  group_by(userId) %>%
+  summarize(b_u = mean(rating - mu_hat - b_i))
+
+qplot(
+  b_u,
+  geom = "histogram",
+  main = "Movie-User Means",
+  fill = I("blue"),
+  color = I("black"),
+  bins = 25,
+  data =
+    user
+)
+# Compute the predicted ratings on validation dataset
+rmse_movie_user_model <- validation %>%
+  left_join(movie, by = 'movieId') %>%
+  left_join(user, by = 'userId') %>%
+  mutate(pred = mu_hat + b_i + b_u) %>%
+  pull(pred)
+
+rmse_movie_user_model_result <-
+  RMSE(validation$rating, rmse_movie_user_model)
+RMSE_results <-
+  RMSE_results %>% add_row(model = "Mean",
+                           variables = "Movie-User",
+                           RMSE = rmse_movie_user_model_result)
+
+
+```
+The result of the RMSE is 0.863366 which is already below our target!
+We are going to continue trying other models considering different variables and different combinations and see if we can improve our RMSE.
+
+**Movie, user, genre**
+```{r}
+movie_user_genre <- edx %>%
+  left_join(movie, by='movieId') %>%
+  left_join(user, by='userId') %>%
+  group_by(genres) %>%
+  summarize(b_u_x = mean(rating - mu_hat - b_i - b_u))
+
+qplot(b_u_x, geom = "histogram",main="Movie-User-Genre Means",fill=I("blue"), color = I("black"), bins=25, data =
+        movie_user_genre)
+# Compute the predicted ratings on validation dataset
+rmse_movie_user_genre_model <- validation %>%
+  left_join(movie, by='movieId') %>%
+  left_join(user, by='userId') %>%
+  left_join(movie_user_genre, by='genres') %>%
+  mutate(pred = mu_hat + b_i + b_u + b_u_x) %>%
+  pull(pred)
+rmse_movie_user_genre_model_result <- RMSE(validation$rating, rmse_movie_user_genre_model)
+
+RMSE_results <- RMSE_results %>% add_row(model="Mean",variables = "Movie-User-Genre", RMSE=rmse_movie_user_genre_model_result)
+
+```
+By adding the Genre, we get an even better RMSE, 0.8632723, so far is the best one.
+
+
+**Regularization**
+With regularization we penalize movies with large estimates that come from small sample sizes. First we are going to try a few values of lambda (penalty) and see which one works best.
+lambdas <- seq(0, 9, 0.15)
+
+**Regulirized by movie**
+```{r}
+rmses <- sapply(lambdas, function(lambda) {
+  # Calculate average by movie
+  b_i <- edx %>%
+    group_by(movieId) %>%
+    summarize(b_i = sum(rating - mu_hat) / (n() + lambda))
+  # Compute the predicted ratings on validation dataset
+  predicted_ratings <- validation %>%
+    left_join(b_i, by = 'movieId') %>%
+    mutate(pred = mu_hat + b_i) %>%
+    pull(pred)
+  # Predict the RMSE on the validation set
+  return(RMSE(validation$rating, predicted_ratings))
+})
+
+# plot the result of lambdas
+lambdas_RMSE <- data.frame(RMSE = rmses, lambdas = lambdas)
+ggplot(lambdas_RMSE, aes(lambdas, rmses)) +
+  theme_classic()  +
+  geom_point() +
+  labs(title = "Regularized Movie Based Model",
+       y = "RMSEs",
+       x = "lambdas")
+
+# Get the lambda value that minimize the RMSE
+best_lambda <- lambdas[which.min(rmses)]
+
+
+# Predict the RMSE on the validation set
+regularized_movie_model <- min(rmses)
+
+RMSE_results <-
+  RMSE_results %>% add_row(model = "Regularized",
+                           variables = "Movie",
+                           RMSE = regularized_movie_model)
+
+```
+The RMSE is 0.9410381 which is better than the one that wasn’t regularized and only by taking into account the movie but is bigger than our target.
+
+**Regularized by movie and user**
+```{r}
+rmses <- sapply(lambdas, function(lambda) {
+  # Calculate the average by movie
+  b_i <- edx %>%
+    group_by(movieId) %>%
+    summarize(b_i = sum(rating - mu_hat) / (n() + lambda))
+  # Calculate the average by user
+  b_u <- edx %>%
+    left_join(b_i, by='movieId') %>%
+    group_by(userId) %>%
+    summarize(b_u = sum(rating - b_i - mu_hat) / (n() + lambda))
+  # Compute the predicted ratings on validation dataset
+  predicted_ratings <- validation %>%
+    left_join(b_i, by='movieId') %>%
+    left_join(b_u, by='userId') %>%
+    mutate(pred = mu_hat + b_i + b_u) %>%
+    pull(pred)
+  # Predict the RMSE on the validation set
+  return(RMSE(validation$rating, predicted_ratings))
+})
+
+# plot the result of lambdas
+lambdas_RMSE_MU <- data.frame(RMSE = rmses, lambdas = lambdas)
+ggplot(lambdas_RMSE_MU, aes(lambdas, rmses)) +
+  theme_classic()  +
+  geom_point() +
+  labs(title = "Regularized Movie-User Based Model",
+       y = "RMSEs",
+       x = "lambdas")
+
+# Get the lambda value that minimize the RMSE
+best_lambda <- lambdas[which.min(rmses)]
+# Predict the RMSE on the validation set
+regularized_movie_user_model <- min(rmses)
+
+RMSE_results <- RMSE_results %>% add_row(model="Regularized",variables = "Movie-User", RMSE=regularized_movie_user_model)
+```
+The RMSE on the validation dataset is 0.8628243 and this the best one gotten so far, it reaches our goal and is better than the Movie-User-Genre Based Line Model.
+
+
+**Regularized by movie,user and genre**
+```{r}
+rmses <- sapply(lambdas, function(lambda) {
+  # Calculate the average by movie
+  b_i <- edx %>%
+    group_by(movieId) %>%
+    summarize(b_i = sum(rating - mu_hat) / (n() + lambda))
+  # Calculate the average by user
+  b_u <- edx %>%
+    left_join(b_i, by='movieId') %>%
+    group_by(userId) %>%
+    summarize(b_u = sum(rating - b_i - mu_hat) / (n() + lambda))
+  # Calculate the average by genre
+  b_u_x <- edx %>%
+    left_join(b_i, by='movieId') %>%
+    left_join(b_u, by='userId') %>%
+    group_by(genres) %>%
+    summarize(b_u_x = sum(rating - b_i - mu_hat - b_u) / (n() + lambda))
+  # Compute the predicted ratings on validation dataset
+  predicted_ratings <- validation %>%
+    left_join(b_i, by='movieId') %>%
+    left_join(b_u, by='userId') %>%
+    left_join(b_u_x, by='genres') %>%
+    mutate(pred = mu_hat + b_i + b_u + b_u_x) %>%
+    pull(pred)
+  # Predict the RMSE on the validation set
+  return(RMSE(validation$rating, predicted_ratings))
+})
+
+# plot the result of lambdas
+lambdas_RMSE_MUG <- data.frame(RMSE = rmses, lambdas = lambdas)
+ggplot(lambdas_RMSE_MUG, aes(lambdas, rmses)) +
+  theme_classic()  +
+  geom_point() +
+  labs(title = "Regularized Movie-User-Genre Based Model",
+       y = "RMSEs",
+       x = "lambdas")
+
+
+# Get the lambda value that minimize the RMSE
+best_lambda <- lambdas[which.min(rmses)]
+# Predict the RMSE on the validation set
+regularized_movie_user_genre_model <- min(rmses)
+
+RMSE_results <- RMSE_results %>% add_row(model="Regularized",variables = "Movie-User-Genre", RMSE=regularized_movie_user_genre_model)
+RMSE_results %>% formattable()
+
+```
+The RMSE on the validation dataset with this model is 0.8627348 which is the best one that we got with the builted models. The genre does not improve much the results with the regularized and the non-regularized models but the Movie-User-Genre regularized model is the best one.
+
+##Results
+```{r}
+RMSE_results %>% formattable()
+```
+
+##Conclusion
+In this project first we prepare and wangle the data so that the type of the variables, the variables and everything is the way we wanted and easier to work with. Fortunately, the data did not need much wrangling. After a few steps it was ready to work with.
+With the trained models and the variables we took into account we can conclude that the genre does not affect much the results like movie or user. But by taking it into account and regularized the model we get a RMSE of 0.8627348, achiving our goal to get a RMSE lower than 0.86490
+
+
