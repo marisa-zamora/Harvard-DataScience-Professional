@@ -1,0 +1,168 @@
+---
+title: "HarvardX – Data Science Capstone: Prediction of Diabetes at Early Stage Capstone Project Report"
+date: "January, 2021"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 2
+    number_sections: true
+    highlight: pygments
+    keep_tex: true
+---
+
+## Overview
+Nowadays health is a very important matter, we do not know when a global pandemic is going to occur and staying healthy, not having any disease or condition is crucial because the ones that do not have any of these are less likely to have complications. This is why I chose this dataset, to create a model that predicts the likelihood of having diabetes at early stage.
+This dataset was collected using direct questionnaires from the patients of Sylhet Diabetes Hospital in Sylhet, Bangladesh.
+
+```{r}
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(ROCR)) install.packages("ROCR", repos = "https://cran.r-project.org/src/contrib/Archive/ROCR/ROCR_1.0-7.tar.gz")
+if(!require(dplyr)) install.packages("dplyr", repos = "http://cran.us.r-project.org")
+if(!require(formattable)) install.packages("formattable", repos = "http://cran.us.r-project.org")
+if(!require(naivebayes)) install.packages("naivebayes", repos = "http://cran.us.r-project.org")
+if(!require(randomForest)) install.packages("randomForest", repos = "http://cran.us.r-project.org")
+
+library(caret)
+library(ROCR)
+library(dplyr)
+library(formattable)
+library(naivebayes)
+library(randomForest)
+
+# Import the data --------------------------------
+
+# https://archive.ics.uci.edu/ml/machine-learning-databases/00529/diabetes_data_upload.csv
+
+
+data <-
+  read.csv(
+    "https://archive.ics.uci.edu/ml/machine-learning-databases/00529/diabetes_data_upload.csv"
+  )
+```
+
+# Data Analysis ---------------------------------
+The data set used in this project is available in this website https://archive.ics.uci.edu/ml/machine-learning-databases/00529/diabetes_data_upload.csv
+The 520-row dataset is divided into two datasets. The training and the validation dataset which is 10 percent of the data. 
+After select only the unique values it appears to be 269 duplicate values, since there is no patient ID , just the attributes, and the description of the dataset said that there were 520 we are going to assume that there are no duplicate values, just patients with the same characteristics.
+```{r}
+nrow(data)
+data2 <- data %>% unique()
+nrow(data2) #it appears to be some duplicated data, but since there are no person ID, just attributes we are going to assume there are no duplicate values, just different people with same attributes
+```
+
+# Exploratory Analysis ---------------------------------
+
+```{r}
+#people with diabetes
+data %>% ggplot(aes(x = class, fill = class)) + geom_bar() +
+  labs(title = "Positive and Negative diagnosis", x = "Diasgnosis",
+       y = "People")
+#This graph shows that there are clearly more patients that participate in the questionaries that are positive on diabetes, but let’s get more insights
+
+#people grouped by age
+data %>% ggplot(aes(x = Age, fill = Age)) + geom_bar() +
+  labs(title = "Age", x = "Age",
+       y = "People")
+
+
+#people grouped by age and diagnosis
+data %>% ggplot(aes(x = Age, fill = class)) + geom_bar() +
+  labs(title = "Positive and Negative diagnosis", x = "Age",
+       y = "People")
+#It appears to be that most of the people are between 25 – 75 years old. There seems to be no pattern in the older the more positive cases.
+
+#people grouped by gender
+data %>% ggplot(aes(x = Gender, fill = class)) + geom_bar() +
+  labs(title = "Gender", x = "Gender",
+       y = "People")
+#This is very interesting plot because even tho there are more males in the dataset, more than the 50% of the are negative. Unlike the females wich only a very small percentage is negative.
+
+
+# Create the train and test datasets
+set.seed(1, sample.kind="Rounding")
+test_index <- createDataPartition(y = data$class, times = 1, p = 0.1, list = FALSE)
+train <- data[-test_index,]
+test <- data[test_index,]
+train <- data.frame(train)
+test <- data.frame(test)
+```
+
+# Predictive model building and evaluation -------------------------------------
+First we are going to create a data frame to keep all the results in there.
+We are going to try tree different models, logistic regression, naive bayes and forest tree, compare their accuracy, sensitivity and specificity to choose the best one
+
+```{r}
+# Create a dataframe to keep the results
+results <- data.frame(model=character(0),accuracy=numeric(),sensitivity=numeric(),specificity=numeric())
+
+#create a cross validation fit control with 3 folds
+
+fit_control <- caret::trainControl(
+  method = "cv",
+  number = 3)
+
+#logistic regresion ***
+
+LR <- train(
+  class ~ .,
+  data = train,
+  method = "regLogistic",
+  trControl = fit_control
+)   
+
+predict_LR <- predict(LR,test)
+
+LR_accuracy <- confusionMatrix(predict_LR,as.factor(test$class))$overall[["Accuracy"]]
+LR_sensitivity <- confusionMatrix(predict_LR,as.factor(test$class))$byClass["Sensitivity"]
+LR_specificity <- confusionMatrix(predict_LR,as.factor(test$class))$byClass["Specificity"]
+results <- results %>% add_row(model="Logistic Regression", accuracy=LR_accuracy,sensitivity = LR_sensitivity,specificity=LR_specificity)
+
+#Achieving an accuracy of 0.9423, sensitivity of 1 and a specificity of 0.9062. Let’s recall that the sensitivity tells us the ability of an algorithm to predict a positive outcome when the actual outcome is positive so here we have a perfect sensitivity but with the specificity we achieve a good value but we are going to see if another model is capable of improving the ability of he algorithm to predict a negative when the outcome is negative
+
+#naive bayes model ***
+naive_model <- naive_bayes(class ~ ., data = train, laplace=1)
+
+predict_NB <- predict(naive_model, newdata=test)
+
+NB_accuracy <- confusionMatrix(predict_NB,as.factor(test$class))$overall[["Accuracy"]]
+NB_sensitivity <- confusionMatrix(predict_NB,as.factor(test$class))$byClass["Sensitivity"]
+NB_specificity <- confusionMatrix(predict_NB,as.factor(test$class))$byClass["Specificity"]
+results <- results %>% add_row(model="Naive Bayes", accuracy=NB_accuracy,sensitivity = NB_sensitivity,specificity=NB_specificity)
+
+#Comparing this to our previous model, all the values decrease except sensitivity. So far the best model is Logistic Regression
+
+#Random Forest
+train$class = factor(train$class)
+RF <- randomForest(class~., data = train)
+
+predict_RF <- predict(RF, newdata=test)
+RF_accuracy <- confusionMatrix(predict_RF,as.factor(test$class))$overall[["Accuracy"]]
+RF_sensitivity <- confusionMatrix(predict_RF,as.factor(test$class))$byClass["Sensitivity"]
+RF_specificity <- confusionMatrix(predict_RF,as.factor(test$class))$byClass["Specificity"]
+results <- results %>% add_row(model="Random Forest", accuracy=RF_accuracy,sensitivity = RF_sensitivity,specificity=RF_specificity)
+
+#Seeing the results it seems that the random forest model is perfect for this dataset. This is the best model!
+```
+
+# Results -------------------------------------------------------------------
+
+
+```{r}
+#Final table
+results%>%formattable()
+#Visualization plot with the results
+results %>% ggplot() + geom_point(aes(model, accuracy,shape=model,size=1, color = "accuracy")) +
+  geom_point(aes(model, sensitivity,shape=model,size=1, color = "sensitivity")) +
+  geom_point(aes(model, specificity, shape=model,size=1,color = "specificity")) +
+  labs(title = "Model Results",
+       y = ". ",
+       x = "Model")+
+  guides(shape = FALSE, size = FALSE)+theme(legend.title = element_blank())
+
+#The best model is the Random Forest, Logistic regression the second best and Naïve Bayes the worst but, not with bad results.
+```
+  
+# Conclusion -------------------------------------------------------------------
+This project was interesting since the dataset selection. Once I choose this one I have to analyze the data, there was not so much of wrangling to do because the data was somehow clean and I say somehow because I think is important to register the ID of every patient so we can be certain that there are no duplicate patients in the dataset, but only people with the same attributes and characteristics.
+The results of the training models are clear and I think this dataset and the predictions are very valuable, specially today with everything that is going on but the next steps should be gathered more data like this to create a larger dataset, adding a patients ID and of course replicate the principles of the dataset and the project with other diseases that can be detected and prevented at an early stage.
+
